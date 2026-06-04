@@ -4,58 +4,50 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>すれちがい美術展 (P2P Demo)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; background-color: #f9f9f9; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        * { box-sizing: border-box; }
+        body { font-family: sans-serif; margin: 0; background-color: #f9f9f9; color: #222; }
+        .container { width: min(100%, 860px); margin: 0 auto; min-height: 100svh; background: white; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #333; }
         .panel { display: none; }
         .panel.active { display: block; }
-        .flex { display: flex; gap: 10px; }
-        input, button { padding: 10px; font-size: 16px; margin-top: 5px; }
+        .flex { display: flex; gap: 10px; flex-wrap: wrap; }
+        .player-settings { display: grid; gap: 6px; max-width: 420px; margin: 0 auto 24px; }
+        .player-settings label { font-weight: bold; }
+        input, button { width: 100%; padding: 12px; font-size: 16px; margin-top: 5px; }
+        input { border: 1px solid #bbb; border-radius: 4px; }
         button { cursor: pointer; background: #0066cc; color: white; border: none; border-radius: 4px; }
         button:hover { background: #0052a3; }
+        button:disabled { background: #9e9e9e !important; cursor: not-allowed; }
 
-        #canvas-area { width: 400px; height: 300px; border: 2px dashed #ccc; margin: 20px auto; position: relative; background: #fff; }
-        #hand-area { display: flex; gap: 10px; justify-content: center; min-height: 80px; padding: 10px; border: 1px solid #ddd; background: #eee; }
+        #canvas-area { width: min(100%, 420px); aspect-ratio: 4 / 3; border: 2px dashed #ccc; margin: 20px auto; position: relative; background: #fff; overflow: hidden; touch-action: none; }
+        #hand-area { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; min-height: 90px; padding: 10px; border: 1px solid #ddd; background: #eee; }
 
-        .card { width: 60px; height: 60px; border: 1px solid #999; border-radius: 4px; background: white; display: flex; justify-content: center; align-items: center; cursor: grab; position: relative; }
+        .card { width: 60px; height: 60px; flex: 0 0 60px; border: 1px solid #999; border-radius: 4px; background: white; display: flex; justify-content: center; align-items: center; cursor: grab; position: relative; touch-action: none; user-select: none; }
+        .card.dragging { cursor: grabbing; box-shadow: 0 8px 16px rgba(0,0,0,0.22); z-index: 1000; }
         .card svg { width: 80%; height: 80%; }
 
+        .lobby-actions { display: grid; gap: 16px; text-align: center; margin-bottom: 30px; }
+        .player-list { margin: 12px auto 0; max-width: 420px; padding: 10px; background: #f4f7fb; border: 1px solid #dbe5f2; border-radius: 6px; text-align: left; }
+        .player-list strong { display: block; margin-bottom: 6px; }
+        .player-list ul { margin: 0; padding-left: 20px; }
         #room-id-display { font-size: 24px; font-weight: bold; color: #d32f2f; text-align: center; padding: 10px; background: #ffebee; margin: 10px 0; }
         .status { padding: 10px; background: #e8f5e9; margin-bottom: 10px; border-radius: 4px; }
 
-        .gallery-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; }
         .gallery-item { border: 1px solid #ccc; padding: 10px; background: #fff; }
-        .gallery-canvas { width: 100%; height: 200px; border: 1px solid #eee; position: relative; overflow: hidden;}
-    
-        @media (max-width: 768px) {
-            body { margin: 8px; }
-            .container { padding: 12px; }
-            #canvas-area {
-                width: 100%;
-                max-width: 100%;
-                height: 260px;
-            }
-            #hand-area {
-                flex-wrap: wrap;
-            }
-            .card {
-                width: 52px;
-                height: 52px;
-                touch-action: none;
-            }
-            .gallery-grid {
-                grid-template-columns: 1fr;
-            }
-            input, button {
-                width: 100%;
-                box-sizing: border-box;
-            }
-        }
+        .gallery-canvas { width: 100%; aspect-ratio: 4 / 3; min-height: 180px; border: 1px solid #eee; position: relative; overflow: hidden;}
 
-</style>
+        @media (max-width: 520px) {
+            .container { padding: 14px; }
+            h1 { font-size: 26px; }
+            #canvas-area { width: 100%; }
+            .card { width: 56px; height: 56px; flex-basis: 56px; }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -64,19 +56,24 @@
 
         <!-- 1. トップ画面 (部屋作成・参加) -->
         <div id="panel-lobby" class="panel active">
-            <div style="text-align: center; margin-bottom: 30px;">
+            <div class="player-settings">
+                <label for="input-player-name">ユーザー名</label>
+                <input type="text" id="input-player-name" maxlength="16" autocomplete="nickname" placeholder="例: やほすい">
+            </div>
+
+            <div class="lobby-actions">
                 <h3>ホストとして部屋を作る</h3>
-                <input type="text" id="input-name" placeholder="ユーザー名を入力" value="Player"><button id="btn-create" style="background: #2e7d32;">部屋を作成する (親機)</button>
+                <button id="btn-create" style="background: #2e7d32;">部屋を作成する (ID: yahosui)</button>
                 <div id="room-id-display" style="display: none;"></div>
-                <div id="host-players" style="display: none;">参加者: 1/2以上</div>
-                <button id="btn-start" style="display: none; background: #d32f2f; width: 100%; margin-top: 10px;">ゲーム開始！(2人以上で開始可能)</button>
+                <div id="host-players" class="player-list" style="display: none;">参加者: 0/4</div>
+                <button id="btn-start" style="display: none; background: #d32f2f; width: 100%; margin-top: 10px;">ゲーム開始！(2人からテストOK)</button>
             </div>
 
             <hr>
 
             <div style="text-align: center; margin-top: 30px;">
                 <h3>ゲストとして部屋に入る</h3>
-                <input type="text" id="input-room-id" placeholder="ホストから聞いたIDを入力">
+                <input type="text" id="input-room-id" value="yahosui" aria-label="ルームID">
                 <button id="btn-join">参加する</button>
             </div>
         </div>
@@ -113,6 +110,28 @@
     </div>
 
     <script>
+        const ROOM_ID = 'yahosui';
+        const MIN_PLAYERS_TO_START = 2;
+        const MAX_PLAYERS = 4;
+        const HAND_SIZE = 8;
+        const CLIENT_ID_KEY = 'surechigai-client-id';
+        const PLAYER_NAME_KEY = 'surechigai-player-name';
+        const URL_PARAMS = new URLSearchParams(location.search);
+        const URL_CLIENT_ID = (URL_PARAMS.get('clientId') || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+        const URL_PLAYER_NAME = (URL_PARAMS.get('name') || '').replace(/[<>]/g, '').slice(0, 16);
+
+        function getBrokerRoomId(roomId = ROOM_ID) {
+            const localHosts = ['127.0.0.1', 'localhost', '::1'];
+            const hostScope = localHosts.includes(location.hostname) ? `local-${location.port || '80'}` : (location.host || 'local');
+            const pageScope = `${hostScope}-${location.pathname || 'page'}`;
+            const scopedId = `${roomId}-${pageScope}`
+                .toLocaleLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/-+/g, '-')
+                .replace(/^-+|-+$/g, '');
+            return scopedId || roomId;
+        }
+
         // お題データ
         const THEMES = [
             { master: "アンパンマン", faker: "ドラえもん" },
@@ -197,9 +216,10 @@
         let connections = []; // ホストが持つゲストとの接続リスト
         let isHost = false;
         let myId = null;
+        let myClientId = getOrCreateClientId();
         let myPlayerIndex = 0; // 0:host, 1-3:guest
         let hostConn = null; // ゲストが持つホストとの接続
-        let myName = 'Player';
+        let renderedRound = null;
 
         let gameState = {
             round: 1,
@@ -209,6 +229,62 @@
         };
 
         const statusBar = document.getElementById('status-bar');
+        const nameInput = document.getElementById('input-player-name');
+        const roomInput = document.getElementById('input-room-id');
+
+        roomInput.value = ROOM_ID;
+        nameInput.value = URL_PLAYER_NAME || localStorage.getItem(PLAYER_NAME_KEY) || `プレイヤー${Math.floor(Math.random() * 900 + 100)}`;
+        nameInput.addEventListener('input', () => {
+            const name = getPlayerName();
+            localStorage.setItem(PLAYER_NAME_KEY, name);
+            updateMyName(name);
+        });
+
+        function getOrCreateClientId() {
+            if (URL_CLIENT_ID) return URL_CLIENT_ID;
+            let id = localStorage.getItem(CLIENT_ID_KEY);
+            if (!id) {
+                id = window.crypto && crypto.randomUUID ? crypto.randomUUID() : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                localStorage.setItem(CLIENT_ID_KEY, id);
+            }
+            return id;
+        }
+
+        function getPlayerName() {
+            const rawName = nameInput.value.trim() || localStorage.getItem(PLAYER_NAME_KEY) || '名無し';
+            return rawName.replace(/[<>]/g, '').slice(0, 16) || '名無し';
+        }
+
+        function normalizeName(name) {
+            return (name || '').trim().toLocaleLowerCase();
+        }
+
+        function escapeHtml(value) {
+            const span = document.createElement('span');
+            span.textContent = value ?? '';
+            return span.innerHTML;
+        }
+
+        function playerLabel(player) {
+            return player.name || `プレイヤー ${player.index + 1}`;
+        }
+
+        function reindexPlayers() {
+            gameState.players.forEach((p, idx) => p.index = idx);
+        }
+
+        function updateMyName(name) {
+            if (isHost) {
+                const me = gameState.players.find(p => p.clientId === myClientId);
+                if (me) {
+                    me.name = name;
+                    me.nameKey = normalizeName(name);
+                    broadcastState();
+                }
+            } else if (hostConn && hostConn.open) {
+                hostConn.send({ type: 'hello', clientId: myClientId, name });
+            }
+        }
 
         function showPanel(panelId) {
             document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -219,31 +295,115 @@
             statusBar.innerText = msg;
         }
 
-        // --- ドラッグ＆ドロップ実装 (バニラJS) ---
+        window.addEventListener('beforeunload', () => {
+            if (peer && !peer.destroyed) peer.destroy();
+        });
+
+        // --- スマホ対応のドラッグ実装 ---
         let draggedCard = null;
         let dragOffsetX = 0, dragOffsetY = 0;
+        let dragContext = null;
         const canvasArea = document.getElementById('canvas-area');
         const handArea = document.getElementById('hand-area');
 
-        function setupDragEvents() {
-            canvasArea.addEventListener('dragover', e => e.preventDefault());
-            canvasArea.addEventListener('drop', e => {
-                e.preventDefault();
-                if(!draggedCard) return;
-                const rect = canvasArea.getBoundingClientRect();
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(value, max));
+        }
+
+        function attachCardEvents(el) {
+            el.draggable = false;
+            el.addEventListener('dragstart', e => e.preventDefault());
+            el.addEventListener('pointerdown', startPointerDrag);
+        }
+
+        function startPointerDrag(e) {
+            if (e.button !== undefined && e.button !== 0) return;
+            e.preventDefault();
+
+            const el = e.currentTarget;
+            const rect = el.getBoundingClientRect();
+            draggedCard = el;
+            dragOffsetX = e.clientX - rect.left;
+            dragOffsetY = e.clientY - rect.top;
+            dragContext = {
+                el,
+                originParent: el.parentNode,
+                originNext: el.nextSibling,
+                originPosition: el.style.position,
+                originLeft: el.style.left,
+                originTop: el.style.top,
+                width: rect.width,
+                height: rect.height
+            };
+
+            el.classList.add('dragging');
+            el.style.position = 'fixed';
+            el.style.left = `${rect.left}px`;
+            el.style.top = `${rect.top}px`;
+            el.style.width = `${rect.width}px`;
+            el.style.height = `${rect.height}px`;
+            document.body.appendChild(el);
+
+            window.addEventListener('pointermove', movePointerDrag);
+            window.addEventListener('pointerup', finishPointerDrag, { once: true });
+            window.addEventListener('pointercancel', cancelPointerDrag, { once: true });
+        }
+
+        function movePointerDrag(e) {
+            if (!draggedCard) return;
+            draggedCard.style.left = `${e.clientX - dragOffsetX}px`;
+            draggedCard.style.top = `${e.clientY - dragOffsetY}px`;
+        }
+
+        function finishPointerDrag(e) {
+            if (!draggedCard || !dragContext) return;
+
+            window.removeEventListener('pointermove', movePointerDrag);
+            window.removeEventListener('pointercancel', cancelPointerDrag);
+
+            const rect = canvasArea.getBoundingClientRect();
+            const isInsideCanvas = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+
+            if (isInsideCanvas) {
                 const x = e.clientX - rect.left - dragOffsetX;
                 const y = e.clientY - rect.top - dragOffsetY;
-
                 draggedCard.style.position = 'absolute';
-                draggedCard.style.left = Math.max(0, Math.min(x, canvasArea.offsetWidth - 60)) + 'px';
-                draggedCard.style.top = Math.max(0, Math.min(y, canvasArea.offsetHeight - 60)) + 'px';
+                draggedCard.style.left = `${clamp(x, 0, canvasArea.clientWidth - dragContext.width)}px`;
+                draggedCard.style.top = `${clamp(y, 0, canvasArea.clientHeight - dragContext.height)}px`;
+                draggedCard.style.width = '';
+                draggedCard.style.height = '';
+                draggedCard.classList.remove('dragging');
+                canvasArea.appendChild(draggedCard);
+            } else {
+                restoreDraggedCard();
+            }
 
-                if(draggedCard.parentNode !== canvasArea) {
-                    canvasArea.appendChild(draggedCard);
-                }
-            });
+            draggedCard = null;
+            dragContext = null;
         }
-        setupDragEvents();
+
+        function cancelPointerDrag() {
+            window.removeEventListener('pointermove', movePointerDrag);
+            restoreDraggedCard();
+            draggedCard = null;
+            dragContext = null;
+        }
+
+        function restoreDraggedCard() {
+            if (!draggedCard || !dragContext) return;
+            draggedCard.classList.remove('dragging');
+            draggedCard.style.position = dragContext.originPosition;
+            draggedCard.style.left = dragContext.originLeft;
+            draggedCard.style.top = dragContext.originTop;
+            draggedCard.style.width = '';
+            draggedCard.style.height = '';
+
+            if (dragContext.originNext && dragContext.originNext.parentNode === dragContext.originParent) {
+                dragContext.originParent.insertBefore(draggedCard, dragContext.originNext);
+            } else {
+                dragContext.originParent.appendChild(draggedCard);
+            }
+        }
 
         function renderHand(cards) {
             handArea.innerHTML = '';
@@ -251,126 +411,193 @@
             cards.forEach(cardData => {
                 const el = document.createElement('div');
                 el.className = 'card';
-                el.draggable = true;
                 el.dataset.cardId = cardData.id;
                 el.appendChild(createSvgIcon(cardData));
-
-                el.addEventListener('dragstart', e => {
-                    draggedCard = el;
-                    const rect = el.getBoundingClientRect();
-                    dragOffsetX = e.clientX - rect.left;
-                    dragOffsetY = e.clientY - rect.top;
-                });
-                enableTouchDrag(el);
+                attachCardEvents(el);
                 handArea.appendChild(el);
             });
         }
 
-        
-        // モバイル用タッチ移動
-        function enableTouchDrag(el) {
-            let startX = 0, startY = 0;
-
-            el.addEventListener('touchstart', e => {
-                const touch = e.touches[0];
-                startX = touch.clientX;
-                startY = touch.clientY;
-                draggedCard = el;
-            });
-
-            el.addEventListener('touchmove', e => {
-                e.preventDefault();
-                if (!draggedCard) return;
-
-                const touch = e.touches[0];
-                const rect = canvasArea.getBoundingClientRect();
-
-                let x = touch.clientX - rect.left - 25;
-                let y = touch.clientY - rect.top - 25;
-
-                x = Math.max(0, Math.min(x, canvasArea.offsetWidth - 60));
-                y = Math.max(0, Math.min(y, canvasArea.offsetHeight - 60));
-
-                draggedCard.style.position = 'absolute';
-                draggedCard.style.left = x + 'px';
-                draggedCard.style.top = y + 'px';
-
-                if(draggedCard.parentNode !== canvasArea) {
-                    canvasArea.appendChild(draggedCard);
-                }
-            }, { passive: false });
-
-            el.addEventListener('touchend', () => {
-                draggedCard = null;
-            });
-        }
-
-
         // --- P2P処理 ---
         function initHost() {
-            peer = new Peer('yahosui');
+            if (peer && !peer.destroyed) return;
+
+            const name = getPlayerName();
+            localStorage.setItem(PLAYER_NAME_KEY, name);
+            peer = new Peer(getBrokerRoomId(ROOM_ID));
             peer.on('open', id => {
                 isHost = true;
                 myId = id;
-                myName = document.getElementById('input-name').value.trim() || 'Host';
-                document.getElementById('room-id-display').innerText = id;
+                document.getElementById('room-id-display').innerText = `ルームID: ${ROOM_ID}`;
                 document.getElementById('room-id-display').style.display = 'block';
                 document.getElementById('host-players').style.display = 'block';
-                document.getElementById('host-players').innerText = `参加者: 1/2以上`;
-                updateStatus('部屋を作成しました。IDを他の3人に伝えてください。');
+                document.getElementById('btn-create').disabled = true;
+                updateStatus('部屋を作成しました。ID「yahosui」で友人が参加できます。');
 
-                gameState.players.push({ id: myId, name: myName, index: 0, isReady: false });
+                gameState.players = [{
+                    id: myId,
+                    clientId: myClientId,
+                    name,
+                    nameKey: normalizeName(name),
+                    index: 0,
+                    isReady: false,
+                    isConnected: true
+                }];
+                updateHostLobby();
             });
 
             peer.on('connection', conn => {
-                if(gameState.players.length >= 4) {
-                    conn.send({ type: 'error', msg: '部屋は満員です' });
-                    setTimeout(() => conn.close(), 500);
-                    return;
+                const metadata = conn.metadata || {};
+                registerGuestConnection(conn, metadata);
+                conn.on('data', data => handleDataFromGuest(conn, data));
+                conn.on('close', () => handleGuestDisconnect(conn));
+                conn.on('error', err => updateStatus(`通信エラー: ${err.message || err.type || err}`));
+            });
+
+            peer.on('error', err => {
+                if (err.type === 'unavailable-id') {
+                    updateStatus('このページのID「yahosui」はすでに使われています。別の端末でホストを開いていないか確認してください。');
+                } else {
+                    updateStatus(`接続エラー: ${err.message || err.type || err}`);
                 }
-
-                connections.push(conn);
-
-                document.getElementById('host-players').innerText = `参加者: ${gameState.players.length}/4`;
-                updateStatus(`プレイヤーが参加しました (${gameState.players.length}/4)`);
-
-                conn.on('data', data => handleDataFromGuest(conn.peer, data));
-
-                if(gameState.players.length === 4) {
-                    document.getElementById('btn-start').style.display = 'block';
-                }
-
-                broadcastState();
             });
         }
 
         function initGuest(hostId) {
+            if (peer && !peer.destroyed) return;
+
+            const name = getPlayerName();
+            localStorage.setItem(PLAYER_NAME_KEY, name);
             peer = new Peer();
             peer.on('open', id => {
                 myId = id;
-                myName = document.getElementById('input-name').value.trim() || ('Guest-' + id.slice(0,4));
                 updateStatus('ホストに接続中...');
-                hostConn = peer.connect(hostId);
+                hostConn = peer.connect(getBrokerRoomId(hostId || ROOM_ID), {
+                    metadata: { clientId: myClientId, name }
+                });
 
                 hostConn.on('open', () => {
-                    hostConn.send({ type: 'join', name: myName });
                     updateStatus('接続成功！ホストの開始を待っています。');
+                    hostConn.send({ type: 'hello', clientId: myClientId, name });
                 });
 
                 hostConn.on('data', data => handleDataFromHost(data));
+                hostConn.on('close', () => updateStatus('ホストとの接続が切れました。'));
+                hostConn.on('error', err => updateStatus(`通信エラー: ${err.message || err.type || err}`));
             });
+
+            peer.on('error', err => {
+                updateStatus(`接続エラー: ${err.message || err.type || err}`);
+            });
+        }
+
+        function registerGuestConnection(conn, info = {}) {
+            if (!isHost) return;
+
+            const clientId = info.clientId || conn.metadata?.clientId || conn.peer;
+            const name = (info.name || conn.metadata?.name || 'ゲスト').replace(/[<>]/g, '').slice(0, 16) || 'ゲスト';
+            const nameKey = normalizeName(name);
+            let player = gameState.players.find(p => p.clientId === clientId);
+            if (!player && nameKey) {
+                player = gameState.players.find(p => p.index !== 0 && p.nameKey === nameKey);
+            }
+            const isSameConnection = player && connections.includes(conn);
+
+            if (player && player.index === 0) {
+                sendToConn(conn, { type: 'error', msg: 'このユーザーはホストとして参加済みです。' });
+                setTimeout(() => conn.close(), 500);
+                updateHostLobby();
+                return;
+            }
+
+            if (!player && gameState.players.length >= MAX_PLAYERS) {
+                sendToConn(conn, { type: 'error', msg: '部屋は満員です' });
+                setTimeout(() => conn.close(), 500);
+                return;
+            }
+
+            if (player) {
+                player.id = conn.peer;
+                player.clientId = clientId;
+                player.name = name;
+                player.nameKey = nameKey;
+                player.isConnected = true;
+                if (!isSameConnection) updateStatus(`${playerLabel(player)} が再接続しました`);
+            } else {
+                player = {
+                    id: conn.peer,
+                    clientId,
+                    name,
+                    nameKey,
+                    index: gameState.players.length,
+                    isReady: false,
+                    isConnected: true
+                };
+                gameState.players.push(player);
+                updateStatus(`${playerLabel(player)} が参加しました (${gameState.players.length}/${MAX_PLAYERS})`);
+            }
+
+            conn.playerClientId = player.clientId;
+            const oldConnections = connections.filter(existing => existing.playerClientId === player.clientId && existing !== conn);
+            connections = connections.filter(existing => existing !== conn && !oldConnections.includes(existing));
+            connections.push(conn);
+            setTimeout(() => oldConnections.forEach(existing => existing.close()), 0);
+            reindexPlayers();
+            updateHostLobby();
+            broadcastState();
+        }
+
+        function handleGuestDisconnect(conn) {
+            connections = connections.filter(c => c !== conn);
+            if (!isHost || !conn.playerClientId) return;
+            const hasReplacement = connections.some(c => c.playerClientId === conn.playerClientId);
+            if (hasReplacement) return;
+
+            const player = gameState.players.find(p => p.clientId === conn.playerClientId);
+            if (player) player.isConnected = false;
+
+            if (gameState.phase === 'lobby') {
+                gameState.players = gameState.players.filter(p => p.index === 0 || p.clientId !== conn.playerClientId);
+                reindexPlayers();
+            }
+
+            updateHostLobby();
+            broadcastState();
+        }
+
+        function sendToConn(conn, message) {
+            if (conn.open) {
+                conn.send(message);
+            } else {
+                conn.on('open', () => conn.send(message));
+            }
+        }
+
+        function updateHostLobby() {
+            const hostPlayers = document.getElementById('host-players');
+            const startButton = document.getElementById('btn-start');
+            hostPlayers.style.display = 'block';
+            hostPlayers.innerHTML = `<strong>参加者: ${gameState.players.length}/${MAX_PLAYERS}</strong><ul>${gameState.players.map(p => `<li>${escapeHtml(playerLabel(p))}${p.clientId === myClientId || p.id === myId ? '（あなた）' : ''}${p.isConnected === false ? '（未接続）' : ''}</li>`).join('')}</ul>`;
+            startButton.style.display = isHost ? 'block' : 'none';
+            startButton.disabled = gameState.players.length < MIN_PLAYERS_TO_START;
         }
 
         function broadcastState() {
             if(!isHost) return;
             const stateToSend = JSON.stringify(gameState);
-            connections.forEach(conn => conn.send({ type: 'sync', state: stateToSend }));
+            connections.forEach(conn => {
+                if (conn.open) conn.send({ type: 'sync', state: stateToSend });
+            });
             renderLocalState();
         }
 
         // --- ホスト側のゲーム進行ロジック ---
         document.getElementById('btn-start').addEventListener('click', () => {
             if(!isHost) return;
+            if(gameState.players.length < MIN_PLAYERS_TO_START) {
+                updateStatus('2人以上で開始できます。');
+                return;
+            }
             startRound();
         });
 
@@ -385,8 +612,7 @@
             gameState.players.forEach((p, idx) => {
                 p.isFaker = (idx === fakerIndex);
                 p.theme = p.isFaker ? themePair.faker : themePair.master;
-                // 最初の手札8枚
-                p.hand = gameState.deck.splice(0, 8);
+                p.hand = gameState.deck.splice(0, HAND_SIZE);
                 p.canvas = [];
                 p.isReady = false;
                 p.vote = null;
@@ -397,32 +623,14 @@
         }
 
         // ホストがゲストからの通信を受ける
-        function handleDataFromGuest(peerId, data) {
-            const player = gameState.players.find(p => p.id === peerId);
-            if(!player) return;
-
-            
-            if (data.type === 'join') {
-                const existing = gameState.players.find(p => p.name === data.name);
-                if(existing) {
-                    conn.send({ type: 'duplicate_user', existingIndex: existing.index });
-                    return;
-                }
-                const newIdx = gameState.players.length;
-                gameState.players.push({
-                    id: peerId,
-                    name: data.name,
-                    index: newIdx,
-                    isReady: false
-                });
-                document.getElementById('host-players').innerText = `参加者: ${gameState.players.length}/2以上`;
-                updateStatus(`プレイヤー参加: ${data.name}`);
-                if(gameState.players.length >= 2) {
-                    document.getElementById('btn-start').style.display = 'block';
-                }
-                broadcastState();
+        function handleDataFromGuest(conn, data) {
+            if (data.type === 'hello') {
+                registerGuestConnection(conn, data);
                 return;
             }
+
+            const player = gameState.players.find(p => p.clientId === conn.playerClientId || p.id === conn.peer);
+            if(!player) return;
 
             if (data.type === 'submit_canvas') {
                 player.canvas = data.canvasData;
@@ -430,8 +638,9 @@
                 checkAllReadyForGallery();
             } else if (data.type === 'mulligan') {
                 // 手札を引き直して返す
+                if (player.mulliganUsed) return;
                 player.mulliganUsed = true;
-                player.hand = gameState.deck.splice(0, 8);
+                player.hand = gameState.deck.splice(0, HAND_SIZE);
                 broadcastState();
             } else if (data.type === 'vote') {
                 player.vote = data.voteTarget;
@@ -457,35 +666,33 @@
 
         // --- ゲスト(およびホストのローカル)の画面更新ロジック ---
         function handleDataFromHost(data) {
-            if(data.type === 'duplicate_user') {
-                updateStatus('同じユーザー名は1人として扱われます');
-                return;
-            }
-
             if(data.type === 'sync') {
                 gameState = JSON.parse(data.state);
                 renderLocalState();
+            } else if (data.type === 'error') {
+                updateStatus(data.msg || '参加できませんでした。');
             }
         }
 
         function renderLocalState() {
-            const me = gameState.players.find(p => p.id === myId);
+            const me = gameState.players.find(p => p.clientId === myClientId || p.id === myId);
             if(!me) return;
             myPlayerIndex = me.index;
 
             if(gameState.phase === 'lobby') {
                 showPanel('panel-lobby');
+                updateHostLobby();
             } else if (gameState.phase === 'game') {
                 showPanel('panel-game');
 
                 if(!me.isReady) {
-                    document.getElementById('my-theme').innerText = `あなたのお題: ${me.theme}`;
+                    document.getElementById('my-theme').innerText = `${playerLabel(me)}のお題: ${me.theme}`;
                     document.getElementById('btn-mulligan').disabled = me.mulliganUsed;
-                    // 初回のみ描画(再描画でドラッグ状態がリセットされるのを防ぐため、簡易的なフラグ管理が必要ですが今回は都度描画)
-                    if(handArea.innerHTML === '' && canvasArea.innerHTML === '') {
+                    if(renderedRound !== gameState.round || (handArea.innerHTML === '' && canvasArea.innerHTML === '')) {
                         renderHand(me.hand);
+                        renderedRound = gameState.round;
                     }
-                    updateStatus('作品を制作してください。');
+                    updateStatus(`${playerLabel(me)}さん、作品を制作してください。`);
                 } else {
                     document.getElementById('my-theme').innerText = '他のプレイヤーの完成を待っています...';
                     updateStatus('待機中...');
@@ -506,15 +713,16 @@
         // --- アクション送信 ---
         document.getElementById('btn-create').addEventListener('click', initHost);
         document.getElementById('btn-join').addEventListener('click', () => {
-            const id = document.getElementById('input-room-id').value.trim() || 'yahosui';
+            const id = document.getElementById('input-room-id').value.trim() || ROOM_ID;
             if(id) initGuest(id);
         });
 
         document.getElementById('btn-mulligan').addEventListener('click', () => {
             if (isHost) {
                 const me = gameState.players[0];
+                if (me.mulliganUsed) return;
                 me.mulliganUsed = true;
-                me.hand = gameState.deck.splice(0, 8);
+                me.hand = gameState.deck.splice(0, HAND_SIZE);
                 handArea.innerHTML = ''; canvasArea.innerHTML = '';
                 renderHand(me.hand);
                 broadcastState();
@@ -528,11 +736,17 @@
             // キャンバスにあるカードの位置情報を取得
             const cards = canvasArea.querySelectorAll('.card');
             let canvasData = [];
+            const canvasWidth = canvasArea.clientWidth || 1;
+            const canvasHeight = canvasArea.clientHeight || 1;
             cards.forEach(el => {
+                const leftPx = parseFloat(el.style.left) || 0;
+                const topPx = parseFloat(el.style.top) || 0;
                 canvasData.push({
                     id: el.dataset.cardId,
                     left: el.style.left,
-                    top: el.style.top
+                    top: el.style.top,
+                    x: leftPx / canvasWidth,
+                    y: topPx / canvasHeight
                 });
             });
 
@@ -549,11 +763,15 @@
         function renderGallery() {
             const g = document.getElementById('gallery-container');
             g.innerHTML = '';
+            const me = gameState.players.find(p => p.clientId === myClientId || p.id === myId);
+            const hasVoted = me && me.vote !== null && me.vote !== undefined;
 
             gameState.players.forEach(p => {
                 const div = document.createElement('div');
                 div.className = 'gallery-item';
-                div.innerHTML = `<h3>${p.name || ('プレイヤー ' + (p.index + 1))} ${p.id === myId ? '(あなた)' : ''}</h3>`;
+                const title = document.createElement('h3');
+                title.textContent = `${playerLabel(p)} ${p.clientId === myClientId || p.id === myId ? '(あなた)' : ''}`;
+                div.appendChild(title);
 
                 const canvas = document.createElement('div');
                 canvas.className = 'gallery-canvas';
@@ -564,8 +782,8 @@
                     if(cardDef) {
                         const icon = createSvgIcon(cardDef);
                         icon.style.position = 'absolute';
-                        icon.style.left = cData.left;
-                        icon.style.top = cData.top;
+                        icon.style.left = cData.x !== undefined ? `${cData.x * 100}%` : cData.left;
+                        icon.style.top = cData.y !== undefined ? `${cData.y * 100}%` : cData.top;
                         icon.style.width = '60px'; icon.style.height = '60px';
                         canvas.appendChild(icon);
                     }
@@ -574,7 +792,7 @@
                 div.appendChild(canvas);
 
                 // 投票ボタン
-                if (p.id !== myId) {
+                if (p.clientId !== myClientId && p.id !== myId && !hasVoted) {
                     const btn = document.createElement('button');
                     btn.innerText = 'この人が贋作師！';
                     btn.onclick = () => sendVote(p.index);
@@ -586,6 +804,9 @@
         }
 
         function sendVote(targetIndex) {
+            const me = gameState.players.find(p => p.clientId === myClientId || p.id === myId);
+            if (me && me.vote !== null && me.vote !== undefined) return;
+
             updateStatus('投票しました。結果待ち...');
             if (isHost) {
                 gameState.players[0].vote = targetIndex;
@@ -601,10 +822,12 @@
         function renderResult() {
             if(isHost) {
                 document.getElementById('btn-next-round').style.display = 'block';
+            } else {
+                document.getElementById('btn-next-round').style.display = 'none';
             }
 
             const faker = gameState.players.find(p => p.isFaker);
-            let votes = [0,0,0,0];
+            let votes = Array(gameState.players.length).fill(0);
             gameState.players.forEach(p => {
                 if(p.vote !== null) votes[p.vote]++;
             });
@@ -613,11 +836,12 @@
             const votedIndices = [];
             votes.forEach((v, i) => { if(v === maxVote) votedIndices.push(i); });
 
-            let resultHtml = `<p>本当の贋作師は <b>プレイヤー ${faker.index + 1}</b> (お題: ${faker.theme}) でした！</p>`;
-            resultHtml += `<p>正統派のお題は「${gameState.players.find(p=>!p.isFaker).theme}」でした。</p><ul>`;
+            const master = gameState.players.find(p=>!p.isFaker);
+            let resultHtml = `<p>本当の贋作師は <b>${escapeHtml(playerLabel(faker))}</b> (お題: ${escapeHtml(faker.theme)}) でした！</p>`;
+            resultHtml += `<p>正統派のお題は「${escapeHtml(master.theme)}」でした。</p><ul>`;
 
             gameState.players.forEach(p => {
-                resultHtml += `<li>${p.name || ('プレイヤー ' + (p.index + 1))}: ${votes[p.index]}票</li>`;
+                resultHtml += `<li>${escapeHtml(playerLabel(p))}: ${votes[p.index]}票</li>`;
             });
             resultHtml += `</ul>`;
 

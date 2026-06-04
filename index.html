@@ -1,0 +1,544 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>すれちがい美術展 (P2P Demo)</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f9f9f9; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; }
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .flex { display: flex; gap: 10px; }
+        input, button { padding: 10px; font-size: 16px; margin-top: 5px; }
+        button { cursor: pointer; background: #0066cc; color: white; border: none; border-radius: 4px; }
+        button:hover { background: #0052a3; }
+
+        #canvas-area { width: 400px; height: 300px; border: 2px dashed #ccc; margin: 20px auto; position: relative; background: #fff; }
+        #hand-area { display: flex; gap: 10px; justify-content: center; min-height: 80px; padding: 10px; border: 1px solid #ddd; background: #eee; }
+
+        .card { width: 60px; height: 60px; border: 1px solid #999; border-radius: 4px; background: white; display: flex; justify-content: center; align-items: center; cursor: grab; position: relative; }
+        .card svg { width: 80%; height: 80%; }
+
+        #room-id-display { font-size: 24px; font-weight: bold; color: #d32f2f; text-align: center; padding: 10px; background: #ffebee; margin: 10px 0; }
+        .status { padding: 10px; background: #e8f5e9; margin-bottom: 10px; border-radius: 4px; }
+
+        .gallery-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .gallery-item { border: 1px solid #ccc; padding: 10px; background: #fff; }
+        .gallery-canvas { width: 100%; height: 200px; border: 1px solid #eee; position: relative; overflow: hidden;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 すれちがい美術展</h1>
+        <div id="status-bar" class="status">未接続</div>
+
+        <!-- 1. トップ画面 (部屋作成・参加) -->
+        <div id="panel-lobby" class="panel active">
+            <div style="text-align: center; margin-bottom: 30px;">
+                <h3>ホストとして部屋を作る</h3>
+                <button id="btn-create" style="background: #2e7d32;">部屋を作成する (親機)</button>
+                <div id="room-id-display" style="display: none;"></div>
+                <div id="host-players" style="display: none;">参加者: 1/4</div>
+                <button id="btn-start" style="display: none; background: #d32f2f; width: 100%; margin-top: 10px;">ゲーム開始！(4人揃ったら)</button>
+            </div>
+
+            <hr>
+
+            <div style="text-align: center; margin-top: 30px;">
+                <h3>ゲストとして部屋に入る</h3>
+                <input type="text" id="input-room-id" placeholder="ホストから聞いたIDを入力">
+                <button id="btn-join">参加する</button>
+            </div>
+        </div>
+
+        <!-- 2. お題確認＆制作画面 -->
+        <div id="panel-game" class="panel">
+            <h2 style="color: #c2185b; text-align: center;" id="my-theme">あなたのお題: ？？？</h2>
+            <p style="text-align: center;">図形をドラッグしてキャンバスに配置してください</p>
+
+            <div id="canvas-area"></div>
+
+            <div style="text-align: center; margin: 10px;">
+                <button id="btn-mulligan" style="background: #f57c00;">引き直し(1回のみ)</button>
+                <button id="btn-submit" style="background: #2e7d32;">作品を完成する</button>
+            </div>
+
+            <h4>手札:</h4>
+            <div id="hand-area"></div>
+        </div>
+
+        <!-- 3. ギャラリー＆投票画面 -->
+        <div id="panel-gallery" class="panel">
+            <h2>🖼️ ギャラリートーク＆投票</h2>
+            <p>全員の作品です。話し合いの後、贋作師(違うお題の人)だと思う人に投票してください。</p>
+            <div id="gallery-container" class="gallery-grid"></div>
+        </div>
+
+        <!-- 4. 結果画面 -->
+        <div id="panel-result" class="panel">
+            <h2 id="result-title">結果発表</h2>
+            <div id="result-details"></div>
+            <button id="btn-next-round" style="display:none; margin-top:20px;">次のラウンドへ (ホストのみ)</button>
+        </div>
+    </div>
+
+    <script>
+        // お題データ (4人用ペア)
+        const THEMES = [
+            { master: "アンパンマン", faker: "ドラえもん" },
+            { master: "りんご", faker: "いちご" },
+            { master: "トラ", faker: "ライオン" },
+            { master: "ペンギン", faker: "にわとり" },
+            { master: "靴下", faker: "手袋" }
+        ];
+
+        // 図形データ定義
+        const COLORS = ['#e53935', '#1e88e5', '#fdd835', '#43a047', '#212121', '#ffffff']; // 赤青黄緑黒白
+        const SHAPES = [
+            { type: 'circle', size: 50 }, { type: 'circle', size: 20 },
+            { type: 'rect', size: 50 }, { type: 'rect', size: 20 },
+            { type: 'triangle' }, { type: 'line' }, { type: 'cross' }
+        ];
+
+        // 全72枚のデッキ生成
+        function generateDeck() {
+            let deck = [];
+            let id = 0;
+            for (let color of COLORS) {
+                // 大丸2, 小丸2, 大四角2, 小四角2, 三角2, 線1, バツ1
+                const shapeCounts = [2, 2, 2, 2, 2, 1, 1];
+                shapeCounts.forEach((count, idx) => {
+                    for(let i=0; i<count; i++) {
+                        deck.push({ id: id++, color: color, shape: SHAPES[idx] });
+                    }
+                });
+            }
+            return deck.sort(() => Math.random() - 0.5);
+        }
+
+        function createSvgIcon(card) {
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("viewBox", "0 0 100 100");
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            g.setAttribute("fill", card.color);
+            if(card.color === '#ffffff') {
+                g.setAttribute("stroke", "#ccc");
+                g.setAttribute("stroke-width", "2");
+            }
+
+            if (card.shape.type === 'circle') {
+                const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                c.setAttribute("cx", "50"); c.setAttribute("cy", "50");
+                c.setAttribute("r", card.shape.size === 50 ? "40" : "15");
+                g.appendChild(c);
+            } else if (card.shape.type === 'rect') {
+                const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                const s = card.shape.size === 50 ? 80 : 30;
+                r.setAttribute("x", 50 - s/2); r.setAttribute("y", 50 - s/2);
+                r.setAttribute("width", s); r.setAttribute("height", s);
+                g.appendChild(r);
+            } else if (card.shape.type === 'triangle') {
+                const p = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+                p.setAttribute("points", "50,15 85,85 15,85");
+                g.appendChild(p);
+            } else if (card.shape.type === 'line') {
+                const l = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                l.setAttribute("x1", "10"); l.setAttribute("y1", "50");
+                l.setAttribute("x2", "90"); l.setAttribute("y2", "50");
+                l.setAttribute("stroke", card.color); l.setAttribute("stroke-width", "8");
+                g.appendChild(l);
+            } else if (card.shape.type === 'cross') {
+                const l1 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                l1.setAttribute("x1", "20"); l1.setAttribute("y1", "20");
+                l1.setAttribute("x2", "80"); l1.setAttribute("y2", "80");
+                l1.setAttribute("stroke", card.color); l1.setAttribute("stroke-width", "10");
+                const l2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                l2.setAttribute("x1", "80"); l2.setAttribute("y1", "20");
+                l2.setAttribute("x2", "20"); l2.setAttribute("y2", "80");
+                l2.setAttribute("stroke", card.color); l2.setAttribute("stroke-width", "10");
+                g.appendChild(l1); g.appendChild(l2);
+            }
+            svg.appendChild(g);
+            return svg;
+        }
+
+        // --- P2P 通信＆状態管理 ---
+        let peer = null;
+        let connections = []; // ホストが持つゲストとの接続リスト
+        let isHost = false;
+        let myId = null;
+        let myPlayerIndex = 0; // 0:host, 1-3:guest
+        let hostConn = null; // ゲストが持つホストとの接続
+
+        let gameState = {
+            round: 1,
+            players: [], // { id, name, theme, isFaker, hand: [], canvas: [], isReady: false, vote: null }
+            deck: [],
+            phase: 'lobby' // lobby, game, gallery, result
+        };
+
+        const statusBar = document.getElementById('status-bar');
+
+        function showPanel(panelId) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.getElementById(panelId).classList.add('active');
+        }
+
+        function updateStatus(msg) {
+            statusBar.innerText = msg;
+        }
+
+        // --- ドラッグ＆ドロップ実装 (バニラJS) ---
+        let draggedCard = null;
+        let dragOffsetX = 0, dragOffsetY = 0;
+        const canvasArea = document.getElementById('canvas-area');
+        const handArea = document.getElementById('hand-area');
+
+        function setupDragEvents() {
+            canvasArea.addEventListener('dragover', e => e.preventDefault());
+            canvasArea.addEventListener('drop', e => {
+                e.preventDefault();
+                if(!draggedCard) return;
+                const rect = canvasArea.getBoundingClientRect();
+                const x = e.clientX - rect.left - dragOffsetX;
+                const y = e.clientY - rect.top - dragOffsetY;
+
+                draggedCard.style.position = 'absolute';
+                draggedCard.style.left = Math.max(0, Math.min(x, canvasArea.offsetWidth - 60)) + 'px';
+                draggedCard.style.top = Math.max(0, Math.min(y, canvasArea.offsetHeight - 60)) + 'px';
+
+                if(draggedCard.parentNode !== canvasArea) {
+                    canvasArea.appendChild(draggedCard);
+                }
+            });
+        }
+        setupDragEvents();
+
+        function renderHand(cards) {
+            handArea.innerHTML = '';
+            canvasArea.innerHTML = '';
+            cards.forEach(cardData => {
+                const el = document.createElement('div');
+                el.className = 'card';
+                el.draggable = true;
+                el.dataset.cardId = cardData.id;
+                el.appendChild(createSvgIcon(cardData));
+
+                el.addEventListener('dragstart', e => {
+                    draggedCard = el;
+                    const rect = el.getBoundingClientRect();
+                    dragOffsetX = e.clientX - rect.left;
+                    dragOffsetY = e.clientY - rect.top;
+                });
+                handArea.appendChild(el);
+            });
+        }
+
+        // --- P2P処理 ---
+        function initHost() {
+            peer = new Peer();
+            peer.on('open', id => {
+                isHost = true;
+                myId = id;
+                document.getElementById('room-id-display').innerText = id;
+                document.getElementById('room-id-display').style.display = 'block';
+                document.getElementById('host-players').style.display = 'block';
+                document.getElementById('host-players').innerText = `参加者: 1/4`;
+                updateStatus('部屋を作成しました。IDを他の3人に伝えてください。');
+
+                gameState.players.push({ id: myId, index: 0, isReady: false });
+            });
+
+            peer.on('connection', conn => {
+                if(gameState.players.length >= 4) {
+                    conn.send({ type: 'error', msg: '部屋は満員です' });
+                    setTimeout(() => conn.close(), 500);
+                    return;
+                }
+
+                connections.push(conn);
+                const newIdx = gameState.players.length;
+                gameState.players.push({ id: conn.peer, index: newIdx, isReady: false });
+
+                document.getElementById('host-players').innerText = `参加者: ${gameState.players.length}/4`;
+                updateStatus(`プレイヤーが参加しました (${gameState.players.length}/4)`);
+
+                conn.on('data', data => handleDataFromGuest(conn.peer, data));
+
+                if(gameState.players.length === 4) {
+                    document.getElementById('btn-start').style.display = 'block';
+                }
+
+                broadcastState();
+            });
+        }
+
+        function initGuest(hostId) {
+            peer = new Peer();
+            peer.on('open', id => {
+                myId = id;
+                updateStatus('ホストに接続中...');
+                hostConn = peer.connect(hostId);
+
+                hostConn.on('open', () => {
+                    updateStatus('接続成功！ホストの開始を待っています。');
+                });
+
+                hostConn.on('data', data => handleDataFromHost(data));
+            });
+        }
+
+        function broadcastState() {
+            if(!isHost) return;
+            const stateToSend = JSON.stringify(gameState);
+            connections.forEach(conn => conn.send({ type: 'sync', state: stateToSend }));
+            renderLocalState();
+        }
+
+        // --- ホスト側のゲーム進行ロジック ---
+        document.getElementById('btn-start').addEventListener('click', () => {
+            if(!isHost) return;
+            startRound();
+        });
+
+        function startRound() {
+            gameState.phase = 'game';
+            gameState.deck = generateDeck();
+
+            // お題と役職の決定
+            const themePair = THEMES[Math.floor(Math.random() * THEMES.length)];
+            const fakerIndex = Math.floor(Math.random() * 4); // 0-3の誰かが贋作師
+
+            gameState.players.forEach((p, idx) => {
+                p.isFaker = (idx === fakerIndex);
+                p.theme = p.isFaker ? themePair.faker : themePair.master;
+                // 最初の手札4枚
+                p.hand = gameState.deck.splice(0, 4);
+                p.canvas = [];
+                p.isReady = false;
+                p.vote = null;
+                p.mulliganUsed = false;
+            });
+
+            broadcastState();
+        }
+
+        // ホストがゲストからの通信を受ける
+        function handleDataFromGuest(peerId, data) {
+            const player = gameState.players.find(p => p.id === peerId);
+            if(!player) return;
+
+            if (data.type === 'submit_canvas') {
+                player.canvas = data.canvasData;
+                player.isReady = true;
+                checkAllReadyForGallery();
+            } else if (data.type === 'mulligan') {
+                // 手札を引き直して返す
+                player.mulliganUsed = true;
+                player.hand = gameState.deck.splice(0, 4);
+                broadcastState();
+            } else if (data.type === 'vote') {
+                player.vote = data.voteTarget;
+                checkAllVoted();
+            }
+        }
+
+        function checkAllReadyForGallery() {
+            if (gameState.players.every(p => p.isReady)) {
+                gameState.phase = 'gallery';
+                broadcastState();
+            } else {
+                broadcastState(); // 待機状態を同期
+            }
+        }
+
+        function checkAllVoted() {
+            if (gameState.players.every(p => p.vote !== null)) {
+                gameState.phase = 'result';
+                broadcastState();
+            }
+        }
+
+        // --- ゲスト(およびホストのローカル)の画面更新ロジック ---
+        function handleDataFromHost(data) {
+            if(data.type === 'sync') {
+                gameState = JSON.parse(data.state);
+                renderLocalState();
+            }
+        }
+
+        function renderLocalState() {
+            const me = gameState.players.find(p => p.id === myId);
+            if(!me) return;
+            myPlayerIndex = me.index;
+
+            if(gameState.phase === 'lobby') {
+                showPanel('panel-lobby');
+            } else if (gameState.phase === 'game') {
+                showPanel('panel-game');
+
+                if(!me.isReady) {
+                    document.getElementById('my-theme').innerText = `あなたのお題: ${me.theme}`;
+                    document.getElementById('btn-mulligan').disabled = me.mulliganUsed;
+                    // 初回のみ描画(再描画でドラッグ状態がリセットされるのを防ぐため、簡易的なフラグ管理が必要ですが今回は都度描画)
+                    if(handArea.innerHTML === '' && canvasArea.innerHTML === '') {
+                        renderHand(me.hand);
+                    }
+                    updateStatus('作品を制作してください。');
+                } else {
+                    document.getElementById('my-theme').innerText = '他のプレイヤーの完成を待っています...';
+                    updateStatus('待機中...');
+                    document.getElementById('hand-area').innerHTML = '';
+                    document.getElementById('canvas-area').innerHTML = '<p style="text-align:center; padding-top:100px;">完成！他の人を待機中...</p>';
+                }
+
+            } else if (gameState.phase === 'gallery') {
+                showPanel('panel-gallery');
+                updateStatus('ギャラリートークの時間です！');
+                renderGallery();
+            } else if (gameState.phase === 'result') {
+                showPanel('panel-result');
+                renderResult();
+            }
+        }
+
+        // --- アクション送信 ---
+        document.getElementById('btn-create').addEventListener('click', initHost);
+        document.getElementById('btn-join').addEventListener('click', () => {
+            const id = document.getElementById('input-room-id').value.trim();
+            if(id) initGuest(id);
+        });
+
+        document.getElementById('btn-mulligan').addEventListener('click', () => {
+            if (isHost) {
+                const me = gameState.players[0];
+                me.mulliganUsed = true;
+                me.hand = gameState.deck.splice(0, 4);
+                handArea.innerHTML = ''; canvasArea.innerHTML = '';
+                renderHand(me.hand);
+                broadcastState();
+            } else {
+                hostConn.send({ type: 'mulligan' });
+                handArea.innerHTML = ''; canvasArea.innerHTML = ''; // 一旦消す
+            }
+        });
+
+        document.getElementById('btn-submit').addEventListener('click', () => {
+            // キャンバスにあるカードの位置情報を取得
+            const cards = canvasArea.querySelectorAll('.card');
+            let canvasData = [];
+            cards.forEach(el => {
+                canvasData.push({
+                    id: el.dataset.cardId,
+                    left: el.style.left,
+                    top: el.style.top
+                });
+            });
+
+            if (isHost) {
+                gameState.players[0].canvas = canvasData;
+                gameState.players[0].isReady = true;
+                checkAllReadyForGallery();
+            } else {
+                hostConn.send({ type: 'submit_canvas', canvasData });
+            }
+        });
+
+        // ギャラリー描画 (他の人の作品を見る)
+        function renderGallery() {
+            const g = document.getElementById('gallery-container');
+            g.innerHTML = '';
+
+            gameState.players.forEach(p => {
+                const div = document.createElement('div');
+                div.className = 'gallery-item';
+                div.innerHTML = `<h3>プレイヤー ${p.index + 1} ${p.id === myId ? '(あなた)' : ''}</h3>`;
+
+                const canvas = document.createElement('div');
+                canvas.className = 'gallery-canvas';
+
+                // 配置情報の復元
+                p.canvas.forEach(cData => {
+                    const cardDef = p.hand.find(h => h.id == cData.id) || gameState.deck.find(h=>h.id == cData.id); // 簡易検索
+                    if(cardDef) {
+                        const icon = createSvgIcon(cardDef);
+                        icon.style.position = 'absolute';
+                        icon.style.left = cData.left;
+                        icon.style.top = cData.top;
+                        icon.style.width = '60px'; icon.style.height = '60px';
+                        canvas.appendChild(icon);
+                    }
+                });
+
+                div.appendChild(canvas);
+
+                // 投票ボタン
+                if (p.id !== myId) {
+                    const btn = document.createElement('button');
+                    btn.innerText = 'この人が贋作師！';
+                    btn.onclick = () => sendVote(p.index);
+                    div.appendChild(btn);
+                }
+
+                g.appendChild(div);
+            });
+        }
+
+        function sendVote(targetIndex) {
+            updateStatus('投票しました。結果待ち...');
+            if (isHost) {
+                gameState.players[0].vote = targetIndex;
+                checkAllVoted();
+            } else {
+                hostConn.send({ type: 'vote', voteTarget: targetIndex });
+            }
+            // ボタンを消すなどのUI処理
+            document.querySelectorAll('.gallery-item button').forEach(b => b.disabled = true);
+        }
+
+        // 結果描画
+        function renderResult() {
+            if(isHost) {
+                document.getElementById('btn-next-round').style.display = 'block';
+            }
+
+            const faker = gameState.players.find(p => p.isFaker);
+            let votes = [0,0,0,0];
+            gameState.players.forEach(p => {
+                if(p.vote !== null) votes[p.vote]++;
+            });
+
+            const maxVote = Math.max(...votes);
+            const votedIndices = [];
+            votes.forEach((v, i) => { if(v === maxVote) votedIndices.push(i); });
+
+            let resultHtml = `<p>本当の贋作師は <b>プレイヤー ${faker.index + 1}</b> (お題: ${faker.theme}) でした！</p>`;
+            resultHtml += `<p>正統派のお題は「${gameState.players.find(p=>!p.isFaker).theme}」でした。</p><ul>`;
+
+            gameState.players.forEach(p => {
+                resultHtml += `<li>プレイヤー ${p.index + 1}: ${votes[p.index]}票</li>`;
+            });
+            resultHtml += `</ul>`;
+
+            if (votedIndices.includes(faker.index) && votedIndices.length === 1) {
+                resultHtml += `<h3 style="color:red">正統派の勝利！（贋作師は見破られました）</h3>`;
+            } else {
+                resultHtml += `<h3 style="color:blue">贋作師の勝利！（逃げ切りました）</h3>`;
+            }
+
+            document.getElementById('result-details').innerHTML = resultHtml;
+            updateStatus('ラウンド終了です。');
+        }
+
+        document.getElementById('btn-next-round').addEventListener('click', () => {
+            if(!isHost) return;
+            gameState.round++;
+            startRound();
+        });
+
+    </script>
+</body>
+</html>

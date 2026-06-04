@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -28,7 +29,33 @@
         .gallery-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .gallery-item { border: 1px solid #ccc; padding: 10px; background: #fff; }
         .gallery-canvas { width: 100%; height: 200px; border: 1px solid #eee; position: relative; overflow: hidden;}
-    </style>
+    
+        @media (max-width: 768px) {
+            body { margin: 8px; }
+            .container { padding: 12px; }
+            #canvas-area {
+                width: 100%;
+                max-width: 100%;
+                height: 260px;
+            }
+            #hand-area {
+                flex-wrap: wrap;
+            }
+            .card {
+                width: 52px;
+                height: 52px;
+                touch-action: none;
+            }
+            .gallery-grid {
+                grid-template-columns: 1fr;
+            }
+            input, button {
+                width: 100%;
+                box-sizing: border-box;
+            }
+        }
+
+</style>
 </head>
 <body>
     <div class="container">
@@ -39,10 +66,10 @@
         <div id="panel-lobby" class="panel active">
             <div style="text-align: center; margin-bottom: 30px;">
                 <h3>ホストとして部屋を作る</h3>
-                <button id="btn-create" style="background: #2e7d32;">部屋を作成する (親機)</button>
+                <input type="text" id="input-name" placeholder="ユーザー名を入力" value="Player"><button id="btn-create" style="background: #2e7d32;">部屋を作成する (親機)</button>
                 <div id="room-id-display" style="display: none;"></div>
-                <div id="host-players" style="display: none;">参加者: 1/4</div>
-                <button id="btn-start" style="display: none; background: #d32f2f; width: 100%; margin-top: 10px;">ゲーム開始！(4人揃ったら)</button>
+                <div id="host-players" style="display: none;">参加者: 1/2以上</div>
+                <button id="btn-start" style="display: none; background: #d32f2f; width: 100%; margin-top: 10px;">ゲーム開始！(2人以上で開始可能)</button>
             </div>
 
             <hr>
@@ -86,7 +113,7 @@
     </div>
 
     <script>
-        // お題データ (4人用ペア)
+        // お題データ
         const THEMES = [
             { master: "アンパンマン", faker: "ドラえもん" },
             { master: "りんご", faker: "いちご" },
@@ -172,6 +199,7 @@
         let myId = null;
         let myPlayerIndex = 0; // 0:host, 1-3:guest
         let hostConn = null; // ゲストが持つホストとの接続
+        let myName = 'Player';
 
         let gameState = {
             round: 1,
@@ -233,23 +261,65 @@
                     dragOffsetX = e.clientX - rect.left;
                     dragOffsetY = e.clientY - rect.top;
                 });
+                enableTouchDrag(el);
                 handArea.appendChild(el);
             });
         }
 
+        
+        // モバイル用タッチ移動
+        function enableTouchDrag(el) {
+            let startX = 0, startY = 0;
+
+            el.addEventListener('touchstart', e => {
+                const touch = e.touches[0];
+                startX = touch.clientX;
+                startY = touch.clientY;
+                draggedCard = el;
+            });
+
+            el.addEventListener('touchmove', e => {
+                e.preventDefault();
+                if (!draggedCard) return;
+
+                const touch = e.touches[0];
+                const rect = canvasArea.getBoundingClientRect();
+
+                let x = touch.clientX - rect.left - 25;
+                let y = touch.clientY - rect.top - 25;
+
+                x = Math.max(0, Math.min(x, canvasArea.offsetWidth - 60));
+                y = Math.max(0, Math.min(y, canvasArea.offsetHeight - 60));
+
+                draggedCard.style.position = 'absolute';
+                draggedCard.style.left = x + 'px';
+                draggedCard.style.top = y + 'px';
+
+                if(draggedCard.parentNode !== canvasArea) {
+                    canvasArea.appendChild(draggedCard);
+                }
+            }, { passive: false });
+
+            el.addEventListener('touchend', () => {
+                draggedCard = null;
+            });
+        }
+
+
         // --- P2P処理 ---
         function initHost() {
-            peer = new Peer();
+            peer = new Peer('yahosui');
             peer.on('open', id => {
                 isHost = true;
                 myId = id;
+                myName = document.getElementById('input-name').value.trim() || 'Host';
                 document.getElementById('room-id-display').innerText = id;
                 document.getElementById('room-id-display').style.display = 'block';
                 document.getElementById('host-players').style.display = 'block';
-                document.getElementById('host-players').innerText = `参加者: 1/4`;
+                document.getElementById('host-players').innerText = `参加者: 1/2以上`;
                 updateStatus('部屋を作成しました。IDを他の3人に伝えてください。');
 
-                gameState.players.push({ id: myId, index: 0, isReady: false });
+                gameState.players.push({ id: myId, name: myName, index: 0, isReady: false });
             });
 
             peer.on('connection', conn => {
@@ -260,8 +330,6 @@
                 }
 
                 connections.push(conn);
-                const newIdx = gameState.players.length;
-                gameState.players.push({ id: conn.peer, index: newIdx, isReady: false });
 
                 document.getElementById('host-players').innerText = `参加者: ${gameState.players.length}/4`;
                 updateStatus(`プレイヤーが参加しました (${gameState.players.length}/4)`);
@@ -280,10 +348,12 @@
             peer = new Peer();
             peer.on('open', id => {
                 myId = id;
+                myName = document.getElementById('input-name').value.trim() || ('Guest-' + id.slice(0,4));
                 updateStatus('ホストに接続中...');
                 hostConn = peer.connect(hostId);
 
                 hostConn.on('open', () => {
+                    hostConn.send({ type: 'join', name: myName });
                     updateStatus('接続成功！ホストの開始を待っています。');
                 });
 
@@ -310,13 +380,13 @@
 
             // お題と役職の決定
             const themePair = THEMES[Math.floor(Math.random() * THEMES.length)];
-            const fakerIndex = Math.floor(Math.random() * 4); // 0-3の誰かが贋作師
+            const fakerIndex = Math.floor(Math.random() * gameState.players.length);
 
             gameState.players.forEach((p, idx) => {
                 p.isFaker = (idx === fakerIndex);
                 p.theme = p.isFaker ? themePair.faker : themePair.master;
-                // 最初の手札4枚
-                p.hand = gameState.deck.splice(0, 4);
+                // 最初の手札8枚
+                p.hand = gameState.deck.splice(0, 8);
                 p.canvas = [];
                 p.isReady = false;
                 p.vote = null;
@@ -331,6 +401,29 @@
             const player = gameState.players.find(p => p.id === peerId);
             if(!player) return;
 
+            
+            if (data.type === 'join') {
+                const existing = gameState.players.find(p => p.name === data.name);
+                if(existing) {
+                    conn.send({ type: 'duplicate_user', existingIndex: existing.index });
+                    return;
+                }
+                const newIdx = gameState.players.length;
+                gameState.players.push({
+                    id: peerId,
+                    name: data.name,
+                    index: newIdx,
+                    isReady: false
+                });
+                document.getElementById('host-players').innerText = `参加者: ${gameState.players.length}/2以上`;
+                updateStatus(`プレイヤー参加: ${data.name}`);
+                if(gameState.players.length >= 2) {
+                    document.getElementById('btn-start').style.display = 'block';
+                }
+                broadcastState();
+                return;
+            }
+
             if (data.type === 'submit_canvas') {
                 player.canvas = data.canvasData;
                 player.isReady = true;
@@ -338,7 +431,7 @@
             } else if (data.type === 'mulligan') {
                 // 手札を引き直して返す
                 player.mulliganUsed = true;
-                player.hand = gameState.deck.splice(0, 4);
+                player.hand = gameState.deck.splice(0, 8);
                 broadcastState();
             } else if (data.type === 'vote') {
                 player.vote = data.voteTarget;
@@ -364,6 +457,11 @@
 
         // --- ゲスト(およびホストのローカル)の画面更新ロジック ---
         function handleDataFromHost(data) {
+            if(data.type === 'duplicate_user') {
+                updateStatus('同じユーザー名は1人として扱われます');
+                return;
+            }
+
             if(data.type === 'sync') {
                 gameState = JSON.parse(data.state);
                 renderLocalState();
@@ -408,7 +506,7 @@
         // --- アクション送信 ---
         document.getElementById('btn-create').addEventListener('click', initHost);
         document.getElementById('btn-join').addEventListener('click', () => {
-            const id = document.getElementById('input-room-id').value.trim();
+            const id = document.getElementById('input-room-id').value.trim() || 'yahosui';
             if(id) initGuest(id);
         });
 
@@ -416,7 +514,7 @@
             if (isHost) {
                 const me = gameState.players[0];
                 me.mulliganUsed = true;
-                me.hand = gameState.deck.splice(0, 4);
+                me.hand = gameState.deck.splice(0, 8);
                 handArea.innerHTML = ''; canvasArea.innerHTML = '';
                 renderHand(me.hand);
                 broadcastState();
@@ -455,7 +553,7 @@
             gameState.players.forEach(p => {
                 const div = document.createElement('div');
                 div.className = 'gallery-item';
-                div.innerHTML = `<h3>プレイヤー ${p.index + 1} ${p.id === myId ? '(あなた)' : ''}</h3>`;
+                div.innerHTML = `<h3>${p.name || ('プレイヤー ' + (p.index + 1))} ${p.id === myId ? '(あなた)' : ''}</h3>`;
 
                 const canvas = document.createElement('div');
                 canvas.className = 'gallery-canvas';
@@ -519,7 +617,7 @@
             resultHtml += `<p>正統派のお題は「${gameState.players.find(p=>!p.isFaker).theme}」でした。</p><ul>`;
 
             gameState.players.forEach(p => {
-                resultHtml += `<li>プレイヤー ${p.index + 1}: ${votes[p.index]}票</li>`;
+                resultHtml += `<li>${p.name || ('プレイヤー ' + (p.index + 1))}: ${votes[p.index]}票</li>`;
             });
             resultHtml += `</ul>`;
 

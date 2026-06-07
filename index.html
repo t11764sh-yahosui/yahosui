@@ -306,51 +306,52 @@ function renderHand(pairs) {
 }
 
 function addPairToHand(pair) {
-    const active   = localHandSides[pair.pairId] || 'front';
-    const inactive = active === 'front' ? 'back' : 'front';
+    const pairId = pair.pairId;
+    if(localHandSides[pairId] === undefined) localHandSides[pairId] = 'front';
 
     const wrapper = document.createElement('div');
     wrapper.className = 'card-pair';
-    wrapper.dataset.pairId = pair.pairId;
+    wrapper.dataset.pairId = pairId;
 
-    // アクティブ側（大）
     const frontEl = document.createElement('div');
     frontEl.className = 'card front-card';
     frontEl.draggable = true;
-    frontEl.dataset.pairId = pair.pairId;
-    frontEl.dataset.side = active;
-    frontEl.appendChild(makeSvg(pair[active]));
+    frontEl.dataset.pairId = pairId;
 
-    // 非アクティブ側（小・グレー）
     const backEl = document.createElement('div');
     backEl.className = 'card back-card';
-    backEl.appendChild(makeSvg(pair[inactive]));
 
-    // 表裏ボタン
+    // SVGをその場で更新（DOM再生成しない）
+    function refreshSides() {
+        const active   = localHandSides[pairId] || 'front';
+        const inactive = active === 'front' ? 'back' : 'front';
+        frontEl.dataset.side = active;
+        frontEl.innerHTML = ''; frontEl.appendChild(makeSvg(pair[active]));
+        backEl.innerHTML  = ''; backEl.appendChild(makeSvg(pair[inactive]));
+    }
+    refreshSides();
+
+    // 表裏ボタン：SVGをその場で差し替えるだけ
     const flipBtn = document.createElement('button');
     flipBtn.className = 'flip-btn';
     flipBtn.textContent = '⇅ 裏表';
     flipBtn.addEventListener('click', e => {
         e.stopPropagation();
-        localHandSides[pair.pairId] = inactive;
-        const w = handArea.querySelector(`.card-pair[data-pair-id="${pair.pairId}"]`);
-        if(w) handArea.removeChild(w);
-        addPairToHand(pair);
+        const cur = localHandSides[pairId] || 'front';
+        localHandSides[pairId] = cur === 'front' ? 'back' : 'front';
+        refreshSides();
     });
     flipBtn.addEventListener('touchend', e => { e.preventDefault(); e.stopPropagation(); flipBtn.click(); });
 
-    // ドラッグ（PC）
-    let pcDragOffX = 0, pcDragOffY = 0;
+    // ドラッグ（PC）: ドラッグ開始時に現在のsideを読む
     frontEl.addEventListener('dragstart', e => {
-        const rect = frontEl.getBoundingClientRect();
-        pcDragOffX = e.clientX - rect.left;
-        pcDragOffY = e.clientY - rect.top;
+        const side = localHandSides[pairId] || 'front';
         e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', JSON.stringify({pairId:pair.pairId, side:active}));
+        e.dataTransfer.setData('text/plain', JSON.stringify({pairId, side}));
     });
 
-    // タッチドラッグ（モバイル）
-    enableHandTouchDrag(frontEl, pair.pairId, active);
+    // タッチドラッグ（モバイル）: sideは渡さず、イベント発火時に読む
+    enableHandTouchDrag(frontEl, pairId);
 
     wrapper.appendChild(frontEl);
     wrapper.appendChild(backEl);
@@ -370,7 +371,8 @@ canvasArea.addEventListener('drop', e => {
 });
 
 // ===== タッチドラッグ（手札→キャンバス）=====
-function enableHandTouchDrag(el, pairId, side) {
+// sideはイベント発火時にlocalHandSidesから読むことで、フリップ後も正しい面が配置される
+function enableHandTouchDrag(el, pairId) {
     let moved = false, ghost = null;
 
     el.addEventListener('touchstart', e => {
@@ -393,6 +395,7 @@ function enableHandTouchDrag(el, pairId, side) {
     el.addEventListener('touchend', e => {
         if(ghost) { document.body.removeChild(ghost); ghost = null; }
         if(!moved) return;
+        const side = localHandSides[pairId] || 'front'; // フリップ後の現在の面を読む
         const t = e.changedTouches[0];
         const rect = canvasArea.getBoundingClientRect();
         if(t.clientX >= rect.left && t.clientX <= rect.right &&
@@ -617,7 +620,7 @@ function handleFromGuest(peerId, data) {
     const player = gameState.players.find(p=>p.id===peerId);
     if(!player) return;
     if(data.type === 'submit_canvas') {
-        player.canvas = data.canvasData; player.isReady = true; checkAllReady();
+        player.canvas = data.canvasData; player.canvasW = data.canvasW; player.canvasH = data.canvasH; player.isReady = true; checkAllReady();
     } else if(data.type === 'mulligan') {
         if(!player.mulliganUsed) { player.mulliganUsed=true; player.hand=gameState.deck.splice(0,4); broadcastState(); }
     } else if(data.type === 'vote') {
@@ -691,17 +694,24 @@ document.getElementById('btn-mulligan').addEventListener('click', () => {
 document.getElementById('btn-submit').addEventListener('click', () => {
     deselectCard();
     const cards = canvasArea.querySelectorAll('.canvas-card');
+    const cw = canvasArea.offsetWidth, ch = canvasArea.offsetHeight;
+    // 位置をキャンバス比率（0〜1）で保存することでギャラリー表示時にスケールが合う
     const canvasData = Array.from(cards).map(el => ({
         pairId:   el.dataset.pairId,
         side:     el.dataset.side,
-        left:     el.style.left,
-        top:      el.style.top,
+        leftPct:  parseFloat(el.style.left) / cw,
+        topPct:   parseFloat(el.style.top)  / ch,
         rotation: el.dataset.rot || '0'
     }));
+    const submission = { canvasData, canvasW: cw, canvasH: ch };
     if(isHost) {
-        gameState.players[0].canvas=canvasData; gameState.players[0].isReady=true; checkAllReady();
+        gameState.players[0].canvas   = submission.canvasData;
+        gameState.players[0].canvasW  = submission.canvasW;
+        gameState.players[0].canvasH  = submission.canvasH;
+        gameState.players[0].isReady  = true;
+        checkAllReady();
     } else {
-        hostConn.send({type:'submit_canvas', canvasData});
+        hostConn.send({type:'submit_canvas', canvasData: submission.canvasData, canvasW: submission.canvasW, canvasH: submission.canvasH});
     }
 });
 
@@ -731,12 +741,27 @@ function renderGallery() {
 
         const cv = document.createElement('div');
         cv.className = 'gallery-canvas';
+        // ゲームキャンバスの実寸を基準にスケーリングし、はみ出しゼロで全体を表示
+        const srcW = p.canvasW || 400, srcH = p.canvasH || 300;
+        const inner = document.createElement('div');
+        inner.style.cssText = `position:absolute;width:${srcW}px;height:${srcH}px;transform-origin:top left;`;
         p.canvas.forEach(cd => {
             const pair = p.hand.find(h=>h.pairId==cd.pairId);
             if(!pair) return;
             const icon = makeSvg(pair[cd.side]);
-            icon.style.cssText = `position:absolute;left:${cd.left};top:${cd.top};width:50px;height:50px;transform:rotate(${cd.rotation||0}deg);transform-origin:center center;`;
-            cv.appendChild(icon);
+            // leftPct/topPct（比率）からゲームキャンバス実座標に戻す
+            const lx = (cd.leftPct != null ? cd.leftPct * srcW : parseFloat(cd.left||0));
+            const ty = (cd.topPct  != null ? cd.topPct  * srcH : parseFloat(cd.top ||0));
+            icon.style.cssText = `position:absolute;left:${lx}px;top:${ty}px;width:60px;height:60px;transform:rotate(${cd.rotation||0}deg);transform-origin:center center;`;
+            inner.appendChild(icon);
+        });
+        cv.appendChild(inner);
+        // cv のレイアウト確定後にスケールを適用（requestAnimationFrame で1フレーム待つ）
+        requestAnimationFrame(() => {
+            const scaleX = cv.offsetWidth  / srcW;
+            const scaleY = cv.offsetHeight / srcH;
+            const scale  = Math.min(scaleX, scaleY);
+            inner.style.transform = `scale(${scale})`;
         });
         div.appendChild(cv);
 
